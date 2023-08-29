@@ -13,6 +13,7 @@ public class CompleteOrderFunction
 {
     private readonly ServiceBusClient _serviceBusClient;
     private readonly SampleDbContext _dbContext;
+    private readonly static Random random = new();
 
     public CompleteOrderFunction(ServiceBusClient serviceBusClient, SampleDbContext dbContext)
     {
@@ -21,50 +22,56 @@ public class CompleteOrderFunction
     }
 
     [FunctionName(nameof(CompleteOrderFunction))]
-    public IActionResult Run(
+    public async Task<IActionResult> RunAsync(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "order/complete")] OrderCompleteRequest req)
     {
         int id = req.Id;
 
         var order = GetOrderById(id);
         var canComplete = order.CanComplete();
-        if (!canComplete) return new BadRequestObjectResult("Order cannot be completed");
+        if (!canComplete) 
+            return new BadRequestObjectResult("Order cannot be completed");
 
         order.Complete();
-        bool paymentSuccess = ProcessPayment(order);
-        if (!paymentSuccess)
+
+        string paymentStatus = ProcessPayment(order);
+        if (paymentStatus == "processing")
         {
             order.MarkAsPaymentPending();
+            await CheckPaymentStatusLaterAsync(order.Id, 1);
         }
         _dbContext.SaveChanges();
 
         return new OkResult();
     }
 
-    private static Order GetOrderById(int orderId)
+    private async Task<bool> CheckPaymentStatusLaterAsync(int id, int retryAttempt)
     {
-        return new Faker<Order>().RuleFor(o=>o.Id, orderId);
-    }
-
-    private static bool ProcessPayment(Order order)
-    {
-        try
+        if (retryAttempt > 3) return false;
+        var delayedTimeSpan = retryAttempt switch
         {
-            // re-trieve customer infor related to order
-            // and call related payment gateway provider
-            return false;
-        }
-        catch (PaymentGatewayException)
-        {
-            return false;
-        }
-    }
-
-    private async Task CheckPaymentStatusLaterAsync(int id, int retryAttempt)
-    {
+            1 => TimeSpan.FromHours(1),
+            2 => TimeSpan.FromHours(6),
+            _ => TimeSpan.FromHours(24)
+        };
         await using var sender = _serviceBusClient.CreateSender("order");
         var message = new ServiceBusMessage(JsonConvert.SerializeObject(new CheckOrderPaymentStatus { Id = id, RetryAttempt = retryAttempt }));
-        var seq = await sender.ScheduleMessageAsync(message, DateTimeOffset.Now.AddMinutes(3));
+        var seq = await sender.ScheduleMessageAsync(message, DateTimeOffset.Now.Add(delayedTimeSpan));
+        return true;
+    }
+
+    private static Order GetOrderById(int orderId)
+    {
+        return new Faker<Order>().RuleFor(o => o.Id, orderId);
+    }
+
+    private static string ProcessPayment(Order order)
+    {
+        // re-trieve customer infor related to order
+        // and call related payment gateway provider
+        int randomNumber = random.Next(2);
+        string result = randomNumber == 0 ? "success" : "processing";
+        return result;
     }
 }
 

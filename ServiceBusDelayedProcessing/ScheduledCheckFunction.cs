@@ -29,6 +29,8 @@ namespace ServiceBusDelayedProcessing
                 .Where(o => o.Status == "PAYMENT_PENDING" 
                     && o.Attempt == 2 
                     && DateTime.UtcNow.Subtract(o.CompletedDateTime).TotalHours >= 24);
+
+            // Payment Gateway status check logic removed for brevity
         }
     }
 }
